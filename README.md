@@ -15,9 +15,9 @@ mvn clean verify
 java -jar target/sales-service-1.0.0.jar
 ```
 
-Las pruebas utilizan Mockito y MockMvc; no necesitan una base de datos ni los
-servicios externos. Para ejecutar la aplicación se requiere PostgreSQL y acceso
-a las API de Customer, Product e Inventory.
+Tests use Mockito and MockMvc. RabbitMQ integration tests use Testcontainers and
+are skipped when Docker is unavailable. Runtime requires PostgreSQL, RabbitMQ,
+and access to the Customer, Product, and Inventory APIs.
 
 ### Configuración de ejecución
 
@@ -32,6 +32,9 @@ Proporcionar las siguientes variables mediante el entorno del proceso:
 | `CUSTOMER_URL` | API Customer; predeterminado `http://customer-service:8080` |
 | `PRODUCT_URL` | API Product; predeterminado `http://product-service:8080` |
 | `INVENTORY_URL` | API Inventory; predeterminado `http://inventory-service:8080` |
+| `RABBITMQ_HOST` | RabbitMQ host; default `localhost` |
+| `RABBITMQ_USER` | RabbitMQ username; default `bysellens` |
+| `RABBITMQ_PASSWORD` | RabbitMQ password; required, with no default |
 
 La configuración original añade `?currentSchema=sales` a `DB_URL`; suministrar
 la URL base sin parámetros. Flyway aplica la migración del esquema `sales` y
@@ -44,8 +47,9 @@ Hibernate valida las entidades. La aplicación escucha en el puerto 8080.
 - `POST /api/ventas`: creación con cabecera `Idempotency-Key` obligatoria.
 - `/actuator/health`: estado de salud.
 
-Las operaciones de ventas requieren JWT con rol `ADMIN`. La coordinación con
-Inventory conserva las reservas idempotentes y la reconciliación programada.
+Sales operations require a JWT with the `ADMIN` role. Inventory reservations
+remain idempotent and are confirmed asynchronously through RabbitMQ and the
+transactional outbox; scheduled reconciliation remains enabled.
 
 ```sh
 docker build -t bysellens-sales-api .
