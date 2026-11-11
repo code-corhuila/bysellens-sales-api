@@ -1,0 +1,14 @@
+target/
+.env
+.env.*
+!.env.example
+*.log
+*.jks
+*.keystore
+*.pem
+*.key
+.idea/
+*.iml
+.vscode/
+.DS_Store
+Thumbs.db
