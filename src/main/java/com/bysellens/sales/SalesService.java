@@ -6,6 +6,7 @@ import java.math.BigDecimal;
 import java.util.*;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
@@ -14,6 +15,7 @@ import org.springframework.web.client.HttpClientErrorException;
 
 @Service
 public class SalesService {
+  private final JdbcTemplate jdbc;
   private final VentaRepository repo;
   private final Remote remote;
   private final ObjectMapper mapper;
@@ -24,6 +26,7 @@ public class SalesService {
       VentaRepository repo,
       Remote remote,
       ObjectMapper mapper,
+      JdbcTemplate jdbc,
       PlatformTransactionManager manager,
       @Value("${customer.url}") String customer,
       @Value("${product.url}") String product,
@@ -120,16 +123,33 @@ public class SalesService {
                       "productoId", d.producto.path("id").asLong(), "cantidad", (long) d.cantidad))
               .toList();
       try {
-        remote.post(
+        var result = remote.post(
             inventory + "/internal/reservas/" + reservation,
             Map.of("detalles", lines),
             JsonNode.class);
-        remote.post(
-            inventory + "/internal/reservas/" + reservation + "/confirmar",
-            Map.of(),
-            JsonNode.class);
-        sale.estado = "CONFIRMADA";
-        return repo.saveAndFlush(sale);
+        String status = result.path("estado").asText();
+        if ("CONFIRMADA".equals(status)) {
+          sale.estado = "CONFIRMADA";
+          return repo.saveAndFlush(sale);
+        }
+        if (!"RESERVADA".equals(status))
+          throw new IllegalStateException("Unexpected inventory reservation state");
+        String eventId = "confirm-venta-" + sale.id;
+        String event =
+            json(
+                Map.of(
+                    "version", 1,
+                    "eventId", eventId,
+                    "ventaId", sale.id,
+                    "reservaId", reservation,
+                    "detalles", lines,
+                    "fecha", sale.fecha.toString()));
+        jdbc.update(
+            "INSERT INTO rabbit_outbox(id,routing_key,payload) VALUES (?,?,?) ON CONFLICT (id) DO NOTHING",
+            eventId,
+            "confirm",
+            event);
+        return sale;
       } catch (HttpClientErrorException e) {
         if (e.getStatusCode().value() == 409 || e.getStatusCode().value() == 404) {
           try {
@@ -143,10 +163,7 @@ public class SalesService {
               return repo.saveAndFlush(sale);
             }
             if (status.equals("RESERVADA"))
-              remote.post(
-                  inventory + "/internal/reservas/" + reservation + "/cancelar",
-                  Map.of(),
-                  JsonNode.class);
+              throw new IllegalStateException("Active reservation requires reconciliation");
           } catch (HttpClientErrorException missing) {
             if (missing.getStatusCode().value() != 404) throw missing;
           }
